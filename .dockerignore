@@ -3,6 +3,9 @@ dist
 dist-ssr
 .git
 .gitignore
+.env
+.env.*
+env.txt
 *.log
 npm-debug.log*
 .vscode

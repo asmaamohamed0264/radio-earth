@@ -91,6 +91,14 @@ export function getMapInstance() {
   return map;
 }
 
+/**
+ * Leaflet measures its container on creation, so a map that was hidden
+ * while the globe was showing comes back with stale dimensions.
+ */
+export function refreshMapSize() {
+  if (map) map.invalidateSize();
+}
+
 // Helper to prevent XSS in popup content
 function escapeHtml(text) {
   if (!text) return '';

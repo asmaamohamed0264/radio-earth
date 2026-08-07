@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# Secrets - this repo is public, keep credentials out of it
+.env
+.env.*
+env.txt
+*.key
+*.pem
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

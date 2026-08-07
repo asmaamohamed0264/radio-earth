@@ -47,9 +47,26 @@
       </div>
     </section>
 
-    <!-- Right: Map (60%) -->
+    <!-- Right: Map / Globe (60%) -->
     <section class="panel panel--map" id="map-panel">
+      <div class="view-switch" id="view-switch" role="group" aria-label="Visualization">
+        <button class="view-card view-card--active" data-view="map" aria-pressed="true">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9 4 3 6.5v13L9 17l6 3 6-2.5v-13L15 7 9 4Z" />
+            <path d="M9 4v13M15 7v13" />
+          </svg>
+          <span>Map</span>
+        </button>
+        <button class="view-card" data-view="globe" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M3 12h18M12 3c2.5 2.4 3.8 5.5 3.8 9S14.5 18.6 12 21c-2.5-2.4-3.8-5.5-3.8-9S9.5 5.4 12 3Z" />
+          </svg>
+          <span>Globe</span>
+        </button>
+      </div>
       <div id="map"></div>
+      <div id="globe" hidden></div>
     </section>
   </main>
 

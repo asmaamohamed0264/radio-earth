@@ -23,7 +23,13 @@ import {
   pause
 } from './player.js';
 import { showToast } from './toast.js';
-import { initMap, updateMapMarkers, highlightMapMarker } from './map.js';
+import { initMap, updateMapMarkers, highlightMapMarker, refreshMapSize } from './map.js';
+import {
+  initGlobe,
+  updateGlobeMarkers,
+  highlightGlobeMarker,
+  setGlobeRunning
+} from './globe.js';
 import {
   initSearch,
   openSearch,
@@ -61,6 +67,11 @@ let favoritesOnly = false;
 let activeStationUuid = null;
 let sleepTimerId = null;
 
+// Visualization: 'map' or 'globe'. The globe initialises lazily so its
+// country outlines are only fetched if someone actually opens it.
+let currentView = 'map';
+let globeInitialized = false;
+
 // Progressive loading / remote search
 let backgroundLoading = false;
 let refreshTimer = null;
@@ -94,6 +105,9 @@ const filtersToggle = document.getElementById('filters-toggle');
 const closeFiltersBtn = document.getElementById('close-filters');
 const searchModal = document.getElementById('search-modal');
 const playerBar = document.getElementById('player-bar');
+const mapEl = document.getElementById('map');
+const globeEl = document.getElementById('globe');
+const viewSwitch = document.getElementById('view-switch');
 
 // ========================================
 // Station Pools
@@ -387,6 +401,76 @@ function updateFavoritesCount() {
 }
 
 // ========================================
+// Visualization (map / globe)
+// ========================================
+
+/**
+ * Push a station list to whichever visualizations exist. The globe is
+ * skipped entirely until someone has opened it once.
+ */
+function updateVisualizations(list) {
+  updateMapMarkers(list);
+  if (globeInitialized) updateGlobeMarkers(list);
+}
+
+/**
+ * Centre the active station in the visualization on screen. Doing it for
+ * the hidden one would animate against a container of the wrong size.
+ */
+function highlightInVisualization(uuid) {
+  if (currentView === 'globe') {
+    highlightGlobeMarker(uuid);
+  } else {
+    highlightMapMarker(uuid);
+  }
+}
+
+function setView(view) {
+  if (view !== 'map' && view !== 'globe') return;
+  currentView = view;
+
+  if (viewSwitch) {
+    viewSwitch.querySelectorAll('.view-card').forEach(card => {
+      const isActive = card.dataset.view === view;
+      card.classList.toggle('view-card--active', isActive);
+      card.setAttribute('aria-pressed', String(isActive));
+    });
+  }
+
+  if (view === 'globe') {
+    if (mapEl) mapEl.style.display = 'none';
+    if (globeEl) globeEl.hidden = false;
+
+    if (!globeInitialized) {
+      initGlobe('globe', currentStations, onStationClick);
+      globeInitialized = true;
+    } else {
+      updateGlobeMarkers(currentStations);
+    }
+
+    setGlobeRunning(true);
+    if (activeStationUuid) highlightGlobeMarker(activeStationUuid);
+  } else {
+    setGlobeRunning(false);
+    if (globeEl) globeEl.hidden = true;
+    if (mapEl) mapEl.style.display = '';
+
+    // Leaflet measured a hidden container; make it measure again.
+    refreshMapSize();
+    if (activeStationUuid) highlightMapMarker(activeStationUuid);
+  }
+}
+
+function setupViewSwitch() {
+  if (!viewSwitch) return;
+  viewSwitch.addEventListener('click', (e) => {
+    const card = e.target.closest('.view-card');
+    if (!card) return;
+    setView(card.dataset.view);
+  });
+}
+
+// ========================================
 // Station Click Handler
 // ========================================
 function onStationClick(station) {
@@ -397,7 +481,7 @@ function onStationClick(station) {
   updatePlayerBar(station);
   updatePlayBtnState();
   highlightCard(station.stationuuid);
-  highlightMapMarker(station.stationuuid);
+  highlightInVisualization(station.stationuuid);
 }
 
 // ========================================
@@ -411,7 +495,7 @@ function onFiltersChange({ preserveScroll = false } = {}) {
   currentStations = filterStations(getWorkingSet(), filters);
 
   renderGrid(currentStations, { preserveScroll });
-  updateMapMarkers(currentStations);
+  updateVisualizations(currentStations);
   updateSearchStations(currentStations);
 
   // Update grid title
@@ -615,7 +699,7 @@ function setupPlayerEvents() {
         setLastPlayed(station);
         updatePlayerBar(station);
         highlightCard(station.stationuuid);
-        highlightMapMarker(station.stationuuid);
+        highlightInVisualization(station.stationuuid);
       }
     });
   }
@@ -629,7 +713,7 @@ function setupPlayerEvents() {
         setLastPlayed(station);
         updatePlayerBar(station);
         highlightCard(station.stationuuid);
-        highlightMapMarker(station.stationuuid);
+        highlightInVisualization(station.stationuuid);
       }
     });
   }
@@ -769,7 +853,7 @@ function setupAudioErrorHandling() {
           setLastPlayed(station);
           updatePlayerBar(station);
           highlightCard(station.stationuuid);
-          highlightMapMarker(station.stationuuid);
+          highlightInVisualization(station.stationuuid);
           updatePlayBtnState();
         }
       }, 1500);
@@ -806,6 +890,7 @@ function startup() {
   setupKeyboard();
   setupAudioErrorHandling();
   setupSearchModal();
+  setupViewSwitch();
   loadStations();
 }
 

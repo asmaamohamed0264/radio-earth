@@ -33,12 +33,6 @@ import {
   setGlobeRunning
 } from './globe.js';
 import {
-  initGlobeGl,
-  updateGlobeGlMarkers,
-  highlightGlobeGlMarker,
-  setGlobeGlRunning
-} from './globe-gl.js';
-import {
   initSearch,
   openSearch,
   closeSearch,
@@ -82,8 +76,6 @@ let sleepTimerId = null;
 // country outlines are only fetched if someone actually opens it.
 let currentView = 'map';
 let globeInitialized = false;
-let globeGlInitialized = false;
-let globeGlLoading = false;
 
 // Chip / dropdown filter state, kept here rather than in filters.js so
 // the sidebar and the inline controls stay independent of each other.
@@ -131,7 +123,6 @@ const searchModal = document.getElementById('search-modal');
 const playerBar = document.getElementById('player-bar');
 const mapEl = document.getElementById('map');
 const globeEl = document.getElementById('globe');
-const globeGlEl = document.getElementById('globegl');
 const viewSwitch = document.getElementById('view-switch');
 const inlineSearchEl = document.getElementById('inline-search');
 const countrySelectEl = document.getElementById('country-select');
@@ -441,7 +432,6 @@ function updateFavoritesCount() {
 function updateVisualizations(list) {
   updateMapMarkers(list);
   if (globeInitialized) updateGlobeMarkers(list);
-  if (globeGlInitialized) updateGlobeGlMarkers(list);
 }
 
 /**
@@ -451,17 +441,13 @@ function updateVisualizations(list) {
 function highlightInVisualization(uuid) {
   if (currentView === 'globe') {
     highlightGlobeMarker(uuid);
-  } else if (currentView === 'globegl') {
-    highlightGlobeGlMarker(uuid);
   } else {
     highlightMapMarker(uuid);
   }
 }
 
-const VIEWS = ['map', 'globe', 'globegl'];
-
-async function setView(view) {
-  if (!VIEWS.includes(view)) return;
+function setView(view) {
+  if (view !== 'map' && view !== 'globe') return;
   currentView = view;
 
   if (viewSwitch) {
@@ -472,19 +458,10 @@ async function setView(view) {
     });
   }
 
-  // Everything not chosen goes quiet: hidden, and not animating.
+  // Whichever is not showing goes quiet: hidden, and not animating.
   setGlobeRunning(view === 'globe');
-  setGlobeGlRunning(view === 'globegl');
   if (mapEl) mapEl.style.display = view === 'map' ? '' : 'none';
   if (globeEl) globeEl.hidden = view !== 'globe';
-  if (globeGlEl) globeGlEl.hidden = view !== 'globegl';
-
-  if (view === 'map') {
-    // Leaflet measured a hidden container; make it measure again.
-    refreshMapSize();
-    if (activeStationUuid) highlightMapMarker(activeStationUuid);
-    return;
-  }
 
   if (view === 'globe') {
     if (!globeInitialized) {
@@ -498,35 +475,9 @@ async function setView(view) {
     return;
   }
 
-  // globegl: three.js has to arrive over the network first.
-  if (!globeGlInitialized) {
-    if (globeGlLoading) return;
-    globeGlLoading = true;
-    if (globeGlEl) globeGlEl.classList.add('view-loading');
-    try {
-      await initGlobeGl('globegl', currentStations, onStationClick);
-      globeGlInitialized = true;
-    } catch (err) {
-      console.warn('3D globe failed to load:', err);
-      showToast('3D globe unavailable', 'error');
-      setView('globe');
-      return;
-    } finally {
-      globeGlLoading = false;
-      if (globeGlEl) globeGlEl.classList.remove('view-loading');
-    }
-
-    // The user may have switched away while three.js was downloading.
-    if (currentView !== 'globegl') {
-      setGlobeGlRunning(false);
-      return;
-    }
-  } else {
-    updateGlobeGlMarkers(currentStations);
-  }
-
-  setGlobeGlRunning(true);
-  if (activeStationUuid) highlightGlobeGlMarker(activeStationUuid);
+  // Leaflet measured a hidden container; make it measure again.
+  refreshMapSize();
+  if (activeStationUuid) highlightMapMarker(activeStationUuid);
 }
 
 function setupViewSwitch() {

@@ -1,15 +1,12 @@
 import { getTheme, onThemeChange, themeColor } from './theme.js';
+import { getStationContinent, getContinentColor } from './continents.js';
+import { feature } from 'topojson-client';
+import countriesUrl from 'world-atlas/countries-110m.json?url';
 
 // globe.gl pulls in three.js, which is by far the heaviest thing in this
 // project. It is imported dynamically so none of it is downloaded unless
 // this view is actually opened.
 let GlobeCtor = null;
-
-// Textures come from the three-globe examples, matched to the theme.
-const TEXTURES = {
-  light: '//unpkg.com/three-globe/example/img/earth-day.jpg',
-  dark: '//unpkg.com/three-globe/example/img/earth-night.jpg'
-};
 
 const AUTO_ROTATE_SPEED = 0.3;
 
@@ -30,20 +27,58 @@ function withCoords(list) {
 }
 
 function pointColor(station) {
-  return station.stationuuid === activeUuid
-    ? themeColor('--danger', '#e00')
-    : themeColor('--text', '#111');
+  if (station.stationuuid === activeUuid) return themeColor('--text', '#111');
+  const continent = getStationContinent(station);
+  return (continent && getContinentColor(continent)) || themeColor('--globe-dot', '#111');
 }
 
+/**
+ * No earth texture: the globe is a plain sphere with country outlines
+ * drawn on top, so the coloured station dots stay legible.
+ */
 function applyTheme() {
   if (!globe) return;
   const theme = getTheme();
+
   globe
-    .globeImageUrl(TEXTURES[theme] || TEXTURES.light)
     .backgroundColor(themeColor('--bg', '#fff'))
     .atmosphereColor(theme === 'dark' ? '#33506e' : '#dfe7ef');
-  // Force the points to re-evaluate their colour accessor.
-  globe.pointColor(globe.pointColor());
+
+  const material = globe.globeMaterial && globe.globeMaterial();
+  if (material && material.color && material.color.set) {
+    material.color.set(themeColor('--globe-ocean', '#f5f5f5'));
+    material.opacity = 1;
+  }
+
+  globe
+    .polygonCapColor(() => 'rgba(0,0,0,0)')
+    .polygonSideColor(() => 'rgba(0,0,0,0)')
+    .polygonStrokeColor(() => themeColor('--globe-line', 'rgba(17,17,17,0.35)'));
+
+  // Force the accessors to re-evaluate against the new theme.
+  globe.pointColor(pointColor);
+}
+
+async function loadOutlines() {
+  try {
+    const response = await fetch(countriesUrl);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const topology = await response.json();
+    const countries = feature(topology, topology.objects.countries);
+    if (globe) {
+      globe
+        .polygonsData(countries.features)
+        // Must sit below pointAltitude, or the outlines become raycast
+        // targets in front of the stations and swallow every click.
+        .polygonAltitude(0.001)
+        .polygonCapColor(() => 'rgba(0,0,0,0)')
+        .polygonSideColor(() => 'rgba(0,0,0,0)')
+        .polygonStrokeColor(() => themeColor('--globe-line', 'rgba(17,17,17,0.35)'));
+    }
+  } catch (err) {
+    // The globe is still usable as a bare sphere with dots.
+    console.warn('GlobeGL: country outlines unavailable:', err);
+  }
 }
 
 /**
@@ -74,8 +109,11 @@ export async function initGlobeGl(containerId, initialStations, onStationClick) 
     .pointLat(d => parseFloat(d.geo_lat))
     .pointLng(d => parseFloat(d.geo_long))
     .pointColor(pointColor)
-    .pointAltitude(0.02)
-    .pointRadius(0.3)
+    // Low discs rather than the default columns: with ~2,000 stations,
+    // tall points turn dense regions into a thicket. Still above the
+    // country outlines so they remain clickable.
+    .pointAltitude(0.012)
+    .pointRadius(0.28)
     .pointLabel(d => `<div class="globe-label"><b>${escapeHtml(d.name)}</b><br/>${escapeHtml(d.country || '')}</div>`)
     .onPointClick(point => {
       if (point && onStationClickCallback) onStationClickCallback(point);
@@ -89,6 +127,7 @@ export async function initGlobeGl(containerId, initialStations, onStationClick) 
 
   applyTheme();
   onThemeChange(applyTheme);
+  loadOutlines();
 
   const controls = globe.controls && globe.controls();
   if (controls) {

@@ -1,6 +1,7 @@
 import { geoOrthographic, geoPath, geoGraticule10, geoDistance } from 'd3-geo';
 import { feature } from 'topojson-client';
 import { onThemeChange, themeColor } from './theme.js';
+import { getStationContinent, getContinentColor } from './continents.js';
 
 // Country outlines are ~107 KB, so they load as a separate file the first
 // time the globe is opened rather than riding along in the main bundle.
@@ -75,7 +76,14 @@ function withCoords(list) {
     const lat = parseFloat(s.geo_lat);
     const lng = parseFloat(s.geo_long);
     if (!lat || !lng || isNaN(lat) || isNaN(lng)) continue;
-    out.push({ station: s, coords: [lng, lat] });
+    // Colour resolved once, not per frame. Stations whose country code
+    // cannot be placed keep the neutral dot.
+    const continent = getStationContinent(s);
+    out.push({
+      station: s,
+      coords: [lng, lat],
+      color: continent ? getContinentColor(continent) : null
+    });
   }
   return out;
 }
@@ -302,7 +310,9 @@ function drawStations() {
   const center = visibleCenter();
   let active = null;
 
-  ctx.fillStyle = palette.dot;
+  // Batched by colour: switching fillStyle per dot would cost a state
+  // change on every one of a couple of thousand points, each frame.
+  const byColor = new Map();
 
   for (const entry of stations) {
     // Anything more than a quarter turn away is on the far side.
@@ -316,8 +326,22 @@ function drawStations() {
       continue;
     }
 
+    const color = entry.color || palette.dot;
+    let bucket = byColor.get(color);
+    if (!bucket) {
+      bucket = [];
+      byColor.set(color, bucket);
+    }
+    bucket.push(point);
+  }
+
+  for (const [color, points] of byColor) {
+    ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.arc(point[0], point[1], 1.7, 0, Math.PI * 2);
+    for (const point of points) {
+      ctx.moveTo(point[0] + 2, point[1]);
+      ctx.arc(point[0], point[1], 2, 0, Math.PI * 2);
+    }
     ctx.fill();
   }
 

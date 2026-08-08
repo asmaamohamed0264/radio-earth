@@ -1,10 +1,20 @@
 import L from 'leaflet';
 import 'leaflet.markercluster';
+import { getTheme, onThemeChange, themeColor } from './theme.js';
+
+// CartoDB ships a matching dark basemap, so the map follows the theme
+// instead of glaring white against a dark interface.
+const TILE_URLS = {
+  light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+  dark: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+};
 
 let map = null;
+let tileLayer = null;
 let markerClusterGroup = null;
 let markersMap = new Map(); // stationuuid -> marker
 let onStationClickCallback = null;
+let lastStations = [];
 
 export function initMap(containerId, stations, onStationClick) {
   onStationClickCallback = onStationClick;
@@ -17,12 +27,17 @@ export function initMap(containerId, stations, onStationClick) {
     attributionControl: true
   });
 
-  // CartoDB Positron tiles - clean light theme
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+  tileLayer = L.tileLayer(TILE_URLS[getTheme()] || TILE_URLS.light, {
     attribution: '&copy; OpenStreetMap &copy; CARTO',
     subdomains: 'abcd',
     maxZoom: 19
   }).addTo(map);
+
+  // Swap the basemap and repaint the markers when the theme flips.
+  onThemeChange((theme) => {
+    if (tileLayer) tileLayer.setUrl(TILE_URLS[theme] || TILE_URLS.light);
+    updateMapMarkers(lastStations);
+  });
 
   // Create MarkerClusterGroup with spiderfy on max zoom
   markerClusterGroup = L.markerClusterGroup({
@@ -43,12 +58,17 @@ export function initMap(containerId, stations, onStationClick) {
 export function updateMapMarkers(stations) {
   if (!markerClusterGroup) return;
 
+  lastStations = stations || [];
+
+  // Markers are drawn, not styled by CSS, so they read the theme here.
+  const dotColor = themeColor('--text', '#111');
+
   // Clear existing markers
   markerClusterGroup.clearLayers();
   markersMap.clear();
 
   // Add markers for the given stations array
-  for (const station of stations) {
+  for (const station of lastStations) {
     const lat = parseFloat(station.geo_lat);
     const lng = parseFloat(station.geo_long);
 
@@ -56,9 +76,9 @@ export function updateMapMarkers(stations) {
 
     const marker = L.circleMarker([lat, lng], {
       radius: 6,
-      color: '#111',
+      color: dotColor,
       weight: 1.5,
-      fillColor: '#111',
+      fillColor: dotColor,
       fillOpacity: 0.7
     });
 

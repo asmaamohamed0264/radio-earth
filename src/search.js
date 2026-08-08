@@ -90,6 +90,15 @@ export function getSearchQuery() {
 }
 
 /**
+ * Mirror a query typed elsewhere (the inline search bar) into the modal
+ * without notifying, so the two never show different text.
+ */
+export function setSearchQuery(value) {
+  if (searchInput) searchInput.value = value || '';
+  if (isSearchOpen()) applyQuery();
+}
+
+/**
  * Clear the query box. Does not notify - the caller is already handling
  * the reset that prompted it.
  */

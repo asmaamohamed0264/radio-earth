@@ -2,7 +2,9 @@ import {
   fetchStations,
   fetchRemainingStations,
   searchStationsRemote,
-  filterStations
+  filterStations,
+  getStationTags,
+  getStationCountry
 } from './api.js';
 import {
   getFavorites,
@@ -31,12 +33,21 @@ import {
   setGlobeRunning
 } from './globe.js';
 import {
+  initGlobeGl,
+  updateGlobeGlMarkers,
+  highlightGlobeGlMarker,
+  setGlobeGlRunning
+} from './globe-gl.js';
+import {
   initSearch,
   openSearch,
   closeSearch,
   updateSearchStations,
-  clearSearchQuery
+  clearSearchQuery,
+  setSearchQuery
 } from './search.js';
+import { CONTINENTS, getStationContinent } from './continents.js';
+import { initTheme, toggleTheme } from './theme.js';
 import {
   initFilters,
   openFilters,
@@ -71,6 +82,19 @@ let sleepTimerId = null;
 // country outlines are only fetched if someone actually opens it.
 let currentView = 'map';
 let globeInitialized = false;
+let globeGlInitialized = false;
+let globeGlLoading = false;
+
+// Chip / dropdown filter state, kept here rather than in filters.js so
+// the sidebar and the inline controls stay independent of each other.
+let activeContinents = new Set();
+let activeChipTags = new Set();
+let activeCountry = '';
+
+// Chips are rebuilt from the unfiltered pool, so selecting one does not
+// remove the others from the row.
+const TAG_CHIP_COUNT = 14;
+const COUNTRY_OPTION_COUNT = 80;
 
 // Progressive loading / remote search
 let backgroundLoading = false;
@@ -107,7 +131,13 @@ const searchModal = document.getElementById('search-modal');
 const playerBar = document.getElementById('player-bar');
 const mapEl = document.getElementById('map');
 const globeEl = document.getElementById('globe');
+const globeGlEl = document.getElementById('globegl');
 const viewSwitch = document.getElementById('view-switch');
+const inlineSearchEl = document.getElementById('inline-search');
+const countrySelectEl = document.getElementById('country-select');
+const continentChipsEl = document.getElementById('continent-chips');
+const tagChipsEl = document.getElementById('tag-chips');
+const btnTheme = document.getElementById('btn-theme');
 
 // ========================================
 // Station Pools
@@ -411,6 +441,7 @@ function updateFavoritesCount() {
 function updateVisualizations(list) {
   updateMapMarkers(list);
   if (globeInitialized) updateGlobeMarkers(list);
+  if (globeGlInitialized) updateGlobeGlMarkers(list);
 }
 
 /**
@@ -420,13 +451,17 @@ function updateVisualizations(list) {
 function highlightInVisualization(uuid) {
   if (currentView === 'globe') {
     highlightGlobeMarker(uuid);
+  } else if (currentView === 'globegl') {
+    highlightGlobeGlMarker(uuid);
   } else {
     highlightMapMarker(uuid);
   }
 }
 
-function setView(view) {
-  if (view !== 'map' && view !== 'globe') return;
+const VIEWS = ['map', 'globe', 'globegl'];
+
+async function setView(view) {
+  if (!VIEWS.includes(view)) return;
   currentView = view;
 
   if (viewSwitch) {
@@ -437,28 +472,61 @@ function setView(view) {
     });
   }
 
-  if (view === 'globe') {
-    if (mapEl) mapEl.style.display = 'none';
-    if (globeEl) globeEl.hidden = false;
+  // Everything not chosen goes quiet: hidden, and not animating.
+  setGlobeRunning(view === 'globe');
+  setGlobeGlRunning(view === 'globegl');
+  if (mapEl) mapEl.style.display = view === 'map' ? '' : 'none';
+  if (globeEl) globeEl.hidden = view !== 'globe';
+  if (globeGlEl) globeGlEl.hidden = view !== 'globegl';
 
+  if (view === 'map') {
+    // Leaflet measured a hidden container; make it measure again.
+    refreshMapSize();
+    if (activeStationUuid) highlightMapMarker(activeStationUuid);
+    return;
+  }
+
+  if (view === 'globe') {
     if (!globeInitialized) {
       initGlobe('globe', currentStations, onStationClick);
       globeInitialized = true;
     } else {
       updateGlobeMarkers(currentStations);
     }
-
     setGlobeRunning(true);
     if (activeStationUuid) highlightGlobeMarker(activeStationUuid);
-  } else {
-    setGlobeRunning(false);
-    if (globeEl) globeEl.hidden = true;
-    if (mapEl) mapEl.style.display = '';
-
-    // Leaflet measured a hidden container; make it measure again.
-    refreshMapSize();
-    if (activeStationUuid) highlightMapMarker(activeStationUuid);
+    return;
   }
+
+  // globegl: three.js has to arrive over the network first.
+  if (!globeGlInitialized) {
+    if (globeGlLoading) return;
+    globeGlLoading = true;
+    if (globeGlEl) globeGlEl.classList.add('view-loading');
+    try {
+      await initGlobeGl('globegl', currentStations, onStationClick);
+      globeGlInitialized = true;
+    } catch (err) {
+      console.warn('3D globe failed to load:', err);
+      showToast('3D globe unavailable', 'error');
+      setView('globe');
+      return;
+    } finally {
+      globeGlLoading = false;
+      if (globeGlEl) globeGlEl.classList.remove('view-loading');
+    }
+
+    // The user may have switched away while three.js was downloading.
+    if (currentView !== 'globegl') {
+      setGlobeGlRunning(false);
+      return;
+    }
+  } else {
+    updateGlobeGlMarkers(currentStations);
+  }
+
+  setGlobeGlRunning(true);
+  if (activeStationUuid) highlightGlobeGlMarker(activeStationUuid);
 }
 
 function setupViewSwitch() {
@@ -468,6 +536,200 @@ function setupViewSwitch() {
     if (!card) return;
     setView(card.dataset.view);
   });
+}
+
+// ========================================
+// Inline Controls (search, chips, country)
+// ========================================
+
+/**
+ * Chips and options are built from the whole local pool, not from the
+ * filtered result. Rebuilding from the result would make the row shrink
+ * to whatever is already selected, with no way back.
+ */
+function renderInlineControls() {
+  renderContinentChips();
+  renderTagChips();
+  renderCountryOptions();
+}
+
+function renderContinentChips() {
+  if (!continentChipsEl) return;
+
+  const counts = new Map();
+  for (const station of allStations) {
+    const id = getStationContinent(station);
+    if (id) counts.set(id, (counts.get(id) || 0) + 1);
+  }
+
+  continentChipsEl.innerHTML = '';
+  continentChipsEl.appendChild(
+    buildChip({ value: '', label: 'All', active: activeContinents.size === 0 })
+  );
+
+  for (const continent of CONTINENTS) {
+    const count = counts.get(continent.id);
+    if (!count) continue;
+    continentChipsEl.appendChild(
+      buildChip({
+        value: continent.id,
+        label: continent.label,
+        dot: continent.color,
+        active: activeContinents.has(continent.id)
+      })
+    );
+  }
+}
+
+function renderTagChips() {
+  if (!tagChipsEl) return;
+
+  const counts = new Map();
+  for (const station of allStations) {
+    for (const tag of getStationTags(station)) {
+      counts.set(tag, (counts.get(tag) || 0) + 1);
+    }
+  }
+
+  const top = Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, TAG_CHIP_COUNT);
+
+  // Keep a selected tag visible even if it drops out of the top slice.
+  for (const tag of activeChipTags) {
+    if (!top.some(([t]) => t === tag)) top.push([tag, counts.get(tag) || 0]);
+  }
+
+  tagChipsEl.innerHTML = '';
+  tagChipsEl.appendChild(
+    buildChip({ value: '', label: 'All', active: activeChipTags.size === 0 })
+  );
+
+  for (const [tag, count] of top) {
+    tagChipsEl.appendChild(
+      buildChip({ value: tag, label: tag, count, active: activeChipTags.has(tag) })
+    );
+  }
+}
+
+function buildChip({ value, label, count, dot, active }) {
+  const chip = document.createElement('button');
+  chip.type = 'button';
+  chip.className = active ? 'chip chip--active' : 'chip';
+  chip.dataset.value = value;
+  chip.setAttribute('aria-pressed', String(!!active));
+
+  if (dot) {
+    const dotEl = document.createElement('span');
+    dotEl.className = 'chip__dot';
+    dotEl.style.background = dot;
+    chip.appendChild(dotEl);
+  }
+
+  const labelEl = document.createElement('span');
+  labelEl.textContent = label;
+  chip.appendChild(labelEl);
+
+  if (count !== undefined) {
+    const countEl = document.createElement('span');
+    countEl.className = 'chip__count';
+    countEl.textContent = count;
+    chip.appendChild(countEl);
+  }
+
+  return chip;
+}
+
+function renderCountryOptions() {
+  if (!countrySelectEl) return;
+
+  const counts = new Map();
+  for (const station of allStations) {
+    const country = getStationCountry(station);
+    counts.set(country, (counts.get(country) || 0) + 1);
+  }
+
+  const top = Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, COUNTRY_OPTION_COUNT)
+    .sort((a, b) => a[0].localeCompare(b[0]));
+
+  const previous = activeCountry;
+  countrySelectEl.innerHTML = '<option value="">All countries</option>';
+
+  for (const [country, count] of top) {
+    const option = document.createElement('option');
+    option.value = country;
+    option.textContent = `${country} (${count})`;
+    countrySelectEl.appendChild(option);
+  }
+
+  // A background batch must not silently drop the current selection.
+  if (previous && !top.some(([c]) => c === previous)) {
+    const option = document.createElement('option');
+    option.value = previous;
+    option.textContent = previous;
+    countrySelectEl.appendChild(option);
+  }
+  countrySelectEl.value = previous;
+}
+
+function setupInlineControls() {
+  if (inlineSearchEl) {
+    let debounce = null;
+    inlineSearchEl.addEventListener('input', () => {
+      const value = inlineSearchEl.value;
+      setSearchQuery(value);
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        debounce = null;
+        onSearchQueryChange(value.trim());
+      }, 180);
+    });
+  }
+
+  if (continentChipsEl) {
+    continentChipsEl.addEventListener('click', (e) => {
+      const chip = e.target.closest('.chip');
+      if (!chip) return;
+      toggleChipValue(activeContinents, chip.dataset.value);
+      renderContinentChips();
+      onFiltersChange();
+    });
+  }
+
+  if (tagChipsEl) {
+    tagChipsEl.addEventListener('click', (e) => {
+      const chip = e.target.closest('.chip');
+      if (!chip) return;
+      toggleChipValue(activeChipTags, chip.dataset.value);
+      renderTagChips();
+      onFiltersChange();
+    });
+  }
+
+  if (countrySelectEl) {
+    countrySelectEl.addEventListener('change', () => {
+      activeCountry = countrySelectEl.value;
+      onFiltersChange();
+    });
+  }
+
+  if (btnTheme) {
+    btnTheme.addEventListener('click', () => toggleTheme());
+  }
+}
+
+/**
+ * The "All" chip carries an empty value and clears the set.
+ */
+function toggleChipValue(set, value) {
+  if (!value) {
+    set.clear();
+    return;
+  }
+  if (set.has(value)) set.delete(value);
+  else set.add(value);
 }
 
 // ========================================
@@ -491,6 +753,17 @@ function onFiltersChange({ preserveScroll = false } = {}) {
   const filters = getActiveFilters();
   filters.favoritesOnly = favoritesOnly;
   filters.favoriteUuids = getFavorites();
+
+  // Merge the inline controls with the sidebar's own selections. Tags
+  // from both are unioned; a chip and a sidebar checkbox for the same
+  // tag mean the same thing.
+  filters.continents = Array.from(activeContinents);
+  filters.tags = Array.from(new Set([...filters.tags, ...activeChipTags]));
+  if (activeCountry) {
+    filters.countries = filters.countries.length
+      ? filters.countries.filter(c => c === activeCountry)
+      : [activeCountry];
+  }
 
   currentStations = filterStations(getWorkingSet(), filters);
 
@@ -519,6 +792,11 @@ function onFiltersChange({ preserveScroll = false } = {}) {
  */
 function onSearchQueryChange(query) {
   setQuery(query);
+
+  // Whichever box was typed in, both show the same text.
+  if (inlineSearchEl && inlineSearchEl.value.trim() !== query) {
+    inlineSearchEl.value = query;
+  }
 
   // Abandon whatever the previous keystroke asked for.
   if (searchAbort) {
@@ -571,8 +849,16 @@ function resetAllFilters() {
     searchAbort = null;
   }
   remoteStations = new Map();
+
+  activeContinents.clear();
+  activeChipTags.clear();
+  activeCountry = '';
+  if (inlineSearchEl) inlineSearchEl.value = '';
+  if (countrySelectEl) countrySelectEl.value = '';
+
   clearAllFilters();
   clearSearchQuery();
+  renderInlineControls();
   onFiltersChange();
 }
 
@@ -597,6 +883,7 @@ function scheduleRefresh() {
 
 function applyPoolRefresh() {
   updateFilterOptions(getWorkingSet());
+  renderInlineControls();
   onFiltersChange({ preserveScroll: true });
 }
 
@@ -647,6 +934,7 @@ async function loadStations() {
     initSearch(allStations, onStationClick, onSearchQueryChange);
     initFilters(allStations, () => onFiltersChange());
     updateFilterOptions(allStations);
+    renderInlineControls();
 
     // Restore last played (show in player bar, don't auto-play)
     const lastPlayed = getLastPlayed();
@@ -883,7 +1171,11 @@ function setupSearchModal() {
 // Startup
 // ========================================
 function startup() {
+  // Before anything paints, so there is no flash of the wrong theme.
+  initTheme();
+
   updateFavoritesCount();
+  setupInlineControls();
   setupGridEvents();
   setupPlayerEvents();
   setupHeaderEvents();

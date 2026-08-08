@@ -1,5 +1,6 @@
 import { geoOrthographic, geoPath, geoGraticule10, geoDistance } from 'd3-geo';
 import { feature } from 'topojson-client';
+import { onThemeChange, themeColor } from './theme.js';
 
 // Country outlines are ~107 KB, so they load as a separate file the first
 // time the globe is opened rather than riding along in the main bundle.
@@ -41,6 +42,30 @@ let rotationStart = null;
 
 let resizeObserver = null;
 
+// Canvas has no cascade, so the theme's colours are read once per change
+// rather than on every one of the sixty frames a second.
+let palette = {
+  ocean: '#f5f5f5',
+  land: '#fff',
+  line: 'rgba(17, 17, 17, 0.18)',
+  grid: 'rgba(17, 17, 17, 0.08)',
+  dot: 'rgba(17, 17, 17, 0.62)',
+  active: '#111',
+  activeRing: '#fff'
+};
+
+function readPalette() {
+  palette = {
+    ocean: themeColor('--globe-ocean', '#f5f5f5'),
+    land: themeColor('--globe-land', '#fff'),
+    line: themeColor('--globe-line', 'rgba(17,17,17,0.18)'),
+    grid: themeColor('--globe-grid', 'rgba(17,17,17,0.08)'),
+    dot: themeColor('--globe-dot', 'rgba(17,17,17,0.62)'),
+    active: themeColor('--text', '#111'),
+    activeRing: themeColor('--bg', '#fff')
+  };
+}
+
 /**
  * Keep only stations the globe can actually place.
  */
@@ -75,6 +100,12 @@ export function initGlobe(containerId, initialStations, onStationClick) {
   path = geoPath(projection, ctx);
 
   stations = withCoords(initialStations || []);
+
+  readPalette();
+  onThemeChange(() => {
+    readPalette();
+    draw();
+  });
 
   resize();
 
@@ -228,13 +259,13 @@ function draw() {
   // Ocean
   ctx.beginPath();
   path({ type: 'Sphere' });
-  ctx.fillStyle = '#f5f5f5';
+  ctx.fillStyle = palette.ocean;
   ctx.fill();
 
   // Graticule
   ctx.beginPath();
   path(graticule);
-  ctx.strokeStyle = 'rgba(17, 17, 17, 0.08)';
+  ctx.strokeStyle = palette.grid;
   ctx.lineWidth = 0.5;
   ctx.stroke();
 
@@ -242,9 +273,9 @@ function draw() {
   if (land) {
     ctx.beginPath();
     path(land);
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = palette.land;
     ctx.fill();
-    ctx.strokeStyle = 'rgba(17, 17, 17, 0.18)';
+    ctx.strokeStyle = palette.line;
     ctx.lineWidth = 0.5;
     ctx.stroke();
   }
@@ -252,7 +283,7 @@ function draw() {
   // Rim
   ctx.beginPath();
   path({ type: 'Sphere' });
-  ctx.strokeStyle = 'rgba(17, 17, 17, 0.25)';
+  ctx.strokeStyle = palette.line;
   ctx.lineWidth = 1;
   ctx.stroke();
 
@@ -271,7 +302,7 @@ function drawStations() {
   const center = visibleCenter();
   let active = null;
 
-  ctx.fillStyle = 'rgba(17, 17, 17, 0.62)';
+  ctx.fillStyle = palette.dot;
 
   for (const entry of stations) {
     // Anything more than a quarter turn away is on the far side.
@@ -294,17 +325,17 @@ function drawStations() {
   if (active) {
     ctx.beginPath();
     ctx.arc(active[0], active[1], 8, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(17, 17, 17, 0.12)';
+    ctx.fillStyle = palette.grid;
     ctx.fill();
 
     ctx.beginPath();
     ctx.arc(active[0], active[1], 4, 0, Math.PI * 2);
-    ctx.fillStyle = '#111';
+    ctx.fillStyle = palette.active;
     ctx.fill();
 
     ctx.beginPath();
     ctx.arc(active[0], active[1], 4, 0, Math.PI * 2);
-    ctx.strokeStyle = '#fff';
+    ctx.strokeStyle = palette.activeRing;
     ctx.lineWidth = 1.5;
     ctx.stroke();
   }

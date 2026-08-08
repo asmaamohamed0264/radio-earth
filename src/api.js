@@ -1,3 +1,5 @@
+import { getStationContinent } from './continents.js';
+
 const API_BASE = 'https://de1.api.radio-browser.info';
 
 const PAGE_SIZE = 1000;
@@ -286,6 +288,7 @@ export function filterStations(stations, filters) {
   const {
     query = '',
     countries = [],
+    continents = [],
     tags = [],
     bitrates = [],
     favoritesOnly = false,
@@ -302,6 +305,12 @@ export function filterStations(stations, filters) {
 
     // Country filter
     if (countries.length > 0 && !countries.includes(getStationCountry(s))) {
+      return false;
+    }
+
+    // Continent filter. Stations whose country code we cannot place are
+    // excluded once a continent is selected, rather than leaking through.
+    if (continents.length > 0 && !continents.includes(getStationContinent(s))) {
       return false;
     }
 
